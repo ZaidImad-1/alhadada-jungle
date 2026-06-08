@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="theme-color" content="#041304"/>
+  <title>Alhadada Jungle 🐍</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;}
+    html,body,#root{width:100%;height:100%;background:#041304;overflow:hidden;}
+    body{touch-action:none;-webkit-tap-highlight-color:transparent;font-family:Trebuchet MS,sans-serif;}
+    #loading{position:fixed;inset:0;background:#041304;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;color:#a8ff78;font-size:22px;gap:12px;z-index:999;}
+    .spin{animation:spin 1s linear infinite;font-size:40px;}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spin">🐍</div>
+    <div>Loading Alhadada Jungle...</div>
+  </div>
+  <div id="root"></div>
+
+  <!-- React + ReactDOM from CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel for JSX transform -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const COLS = 20, ROWS = 20;
+const L1_TARGET = 15, L2_TARGET = 10, L3_TARGET = 5;
+const WALL_SAFE = 3;
+const L1_SPEED = 130, L2_SPEED = 100, L3_SPEED = 90;
+const L1_FRUITS = ["🍌","🍍","🥭","🍈","🍋"];
+const L2_FRUITS = ["💀","🔥","☠️","💎","⚡"];
+const L3_TRASH  = ["🗑️","🧃","🥫","🧴","📦","🪣","🛢️","🧹"];
+
+// ─── Mobile performance config ────────────────────────────────────────────────
+const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+const GFX = {
+  shadows:   !isMobile,
+  particles: isMobile ? 4 : 10,
+  stars:     isMobile ? 25 : 60,
+};
+
+// ─── Audio ────────────────────────────────────────────────────────────────────
+function mkAudio() {
+  try { return new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+}
+function beep(ctx, freqs, type, vol, step) {
+  if (!ctx) return;
+  freqs.forEach((f, i) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.type = type;
+    o.frequency.setValueAtTime(f, ctx.currentTime + i * step);
+    g.gain.setValueAtTime(vol, ctx.currentTime + i * step);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * step + step + 0.05);
+    o.start(ctx.currentTime + i * step);
+    o.stop(ctx.currentTime + i * step + step + 0.06);
+  });
+}
+const playEat  = c => beep(c, [600, 900],           "sine",     0.28, 0.08);
+const playDead = c => beep(c, [260, 200, 150],       "sawtooth", 0.22, 0.13);
+const playLvl  = c => beep(c, [350,450,600,800],     "triangle", 0.18, 0.10);
+
+function startMenuMusic(ctx) {
+  if (!ctx) return null;
+  const notes = [
+    [392,0.0,0.18],[440,0.22,0.18],[494,0.44,0.18],[523,0.66,0.28],
+    [494,1.0,0.18],[440,1.22,0.18],[392,1.44,0.28],[349,1.78,0.18],
+    [392,2.0,0.18],[440,2.22,0.18],[523,2.44,0.35],[494,2.9,0.18],
+    [440,3.12,0.18],[392,3.34,0.28],[349,3.62,0.18],[330,3.84,0.35],
+  ];
+  const loopDuration = 4.3;
+  let stopped = false;
+  function scheduleLoop(baseTime) {
+    if (stopped) return;
+    notes.forEach(([freq, off, dur]) => {
+      const t = baseTime + off;
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+      o.connect(g);
+      if (pan) { g.connect(pan); pan.connect(ctx.destination); } else { g.connect(ctx.destination); }
+      o.type = "triangle";
+      o.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.09, t + 0.04);
+      g.gain.linearRampToValueAtTime(0.07, t + dur * 0.6);
+      g.gain.linearRampToValueAtTime(0, t + dur);
+      o.start(t); o.stop(t + dur + 0.02);
+    });
+    [0,1.0,2.0,3.0].forEach(off => {
+      const t = baseTime + off;
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.type = "sine"; o.frequency.setValueAtTime(98, t);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.08, t + 0.05);
+      g.gain.linearRampToValueAtTime(0, t + 0.3);
+      o.start(t); o.stop(t + 0.35);
+    });
+    if (!stopped) setTimeout(() => scheduleLoop(baseTime + loopDuration), (loopDuration - 0.3) * 1000);
+  }
+  scheduleLoop(ctx.currentTime + 0.1);
+  return () => { stopped = true; };
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function randomFood(snake, obs = []) {
+  const blocked = new Set([...snake.map(s=>`${s.x},${s.y}`), ...obs.map(o=>`${o.x},${o.y}`)]);
+  const minX = WALL_SAFE, maxX = COLS - 1 - WALL_SAFE;
+  const minY = WALL_SAFE, maxY = ROWS - 1 - WALL_SAFE;
+  let p, tries = 0;
+  do {
+    p = { x: minX + Math.floor(Math.random()*(maxX-minX+1)), y: minY + Math.floor(Math.random()*(maxY-minY+1)) };
+    tries++;
+    if (tries > 300) p = { x: Math.floor(Math.random()*COLS), y: Math.floor(Math.random()*ROWS) };
+  } while (blocked.has(`${p.x},${p.y}`));
+  return p;
+}
+
+function makeObstacles(lvl) {
+  if (lvl === 2) return [
+    {x:4, y:4}, {x:15,y:5}, {x:5,y:14}, {x:15,y:14}, {x:10,y:9},
+  ];
+  if (lvl === 3) return [
+    {x:3,y:3}, {x:16,y:3}, {x:3,y:16}, {x:16,y:16},
+    {x:9,y:6}, {x:11,y:6}, {x:9,y:13}, {x:11,y:13},
+    {x:6,y:10}, {x:14,y:10},
+  ];
+  return [];
+}
+
+// ─── Canvas Drawing ───────────────────────────────────────────────────────────
+function drawGame(canvas, state, cellSize) {
+  const ctx = canvas.getContext("2d");
+  const W = COLS * cellSize, H = ROWS * cellSize;
+  const lvl = state.level;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Background
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  if (lvl === 3) {
+    bg.addColorStop(0,"#000008"); bg.addColorStop(0.5,"#00000f"); bg.addColorStop(1,"#010010");
+  } else if (lvl === 2) {
+    bg.addColorStop(0,"#050008"); bg.addColorStop(1,"#0e0010");
+  } else {
+    bg.addColorStop(0,"#071207"); bg.addColorStop(1,"#0a1a0a");
+  }
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars for level 3
+  if (lvl === 3) {
+    ctx.fillStyle = "#fff";
+    const starSeed = state.starSeed || [];
+    starSeed.forEach(s => {
+      const twinkle = 0.3 + 0.7 * Math.abs(Math.sin(Date.now()/1000 + s.phase));
+      ctx.globalAlpha = twinkle * s.brightness;
+      ctx.beginPath();
+      ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI*2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    // nebula glow
+    const neb = ctx.createRadialGradient(W*0.7, H*0.3, 0, W*0.7, H*0.3, W*0.4);
+    neb.addColorStop(0,"rgba(80,0,120,0.15)");
+    neb.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle = neb; ctx.fillRect(0,0,W,H);
+    const neb2 = ctx.createRadialGradient(W*0.2, H*0.7, 0, W*0.2, H*0.7, W*0.35);
+    neb2.addColorStop(0,"rgba(0,40,120,0.12)");
+    neb2.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle = neb2; ctx.fillRect(0,0,W,H);
+  }
+
+  // Grid
+  const gridColor = lvl===3 ? "rgba(60,60,140,0.12)" : lvl===2 ? "rgba(120,0,0,0.12)" : "rgba(50,100,50,0.1)";
+  ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5;
+  for (let r=0;r<=ROWS;r++){ctx.beginPath();ctx.moveTo(0,r*cellSize);ctx.lineTo(W,r*cellSize);ctx.stroke();}
+  for (let c=0;c<=COLS;c++){ctx.beginPath();ctx.moveTo(c*cellSize,0);ctx.lineTo(c*cellSize,H);ctx.stroke();}
+
+  // Obstacles
+  state.obstacles.forEach(o => {
+    const x = o.x*cellSize, y = o.y*cellSize;
+    if (lvl === 3) {
+      // space rocks / asteroids
+      const grd = ctx.createRadialGradient(x+cellSize*0.4,y+cellSize*0.3,1,x+cellSize/2,y+cellSize/2,cellSize*0.55);
+      grd.addColorStop(0,"#444466"); grd.addColorStop(1,"#111128");
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(x+cellSize/2, y+cellSize/2, cellSize*0.44, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(120,120,200,0.35)"; ctx.lineWidth=1;
+      ctx.stroke();
+      if(GFX.shadows){ctx.shadowColor="#6666ff";} if(GFX.shadows){ctx.shadowBlur=4;}
+      ctx.stroke(); if(GFX.shadows){ctx.shadowBlur=0;}
+    } else {
+      const grd = ctx.createLinearGradient(x,y,x+cellSize,y+cellSize);
+      grd.addColorStop(0,"#3a0000"); grd.addColorStop(1,"#770000");
+      ctx.fillStyle = grd;
+      roundRect(ctx,x+1,y+1,cellSize-2,cellSize-2,4); ctx.fill();
+      ctx.strokeStyle="#aa0000"; ctx.lineWidth=1; ctx.stroke();
+    }
+  });
+
+  // Snake
+  if (state.snake.length > 0) drawSnake(ctx, state.snake, cellSize, state.interp, state.prevHead, lvl);
+
+  // Food
+  const fp = state.food.pos;
+  const fx = fp.x*cellSize+cellSize/2, fy = fp.y*cellSize+cellSize/2;
+  const pulse = 1 + 0.12*Math.sin(Date.now()/200);
+  ctx.save();
+  ctx.translate(fx, fy); ctx.scale(pulse,pulse);
+  ctx.font = `${cellSize*0.78}px serif`;
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+  if (lvl===3) { if(GFX.shadows){ctx.shadowColor="#88aaff";} if(GFX.shadows){ctx.shadowBlur=6;} }
+  ctx.fillText(state.food.emoji, 0, 1);
+  ctx.restore();
+
+  // Particles
+  state.particles.forEach(p => {
+    const age = (Date.now()-p.born)/600;
+    if (age>1) return;
+    ctx.globalAlpha = 1-age;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x+p.vx*age*40, p.y+p.vy*age*40, 4*(1-age*0.5), 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha=1;
+  });
+}
+
+function drawSnake(ctx, snake, cs, interp, prevHead, lvl) {
+  if (snake.length===0) return;
+  const r = cs*0.42;
+
+  const pts = snake.map((seg,i) => {
+    if (i===0 && prevHead) return {
+      x:(prevHead.x+(seg.x-prevHead.x)*interp)*cs+cs/2,
+      y:(prevHead.y+(seg.y-prevHead.y)*interp)*cs+cs/2,
+    };
+    return {x:seg.x*cs+cs/2, y:seg.y*cs+cs/2};
+  });
+  const len = pts.length;
+
+  for (let i=len-1;i>=1;i--) {
+    const t = i/len;
+    const a=pts[i], b=pts[i-1];
+    const segR = r*(1-t*0.35);
+    const dx=b.x-a.x, dy=b.y-a.y;
+    const dist=Math.sqrt(dx*dx+dy*dy)||1;
+    const nx=-dy/dist, ny=dx/dist;
+
+    ctx.beginPath();
+    ctx.moveTo(a.x+nx*segR, a.y+ny*segR);
+    ctx.lineTo(b.x+nx*segR, b.y+ny*segR);
+    ctx.arc(b.x,b.y,segR,Math.atan2(dy,dx)-Math.PI/2,Math.atan2(dy,dx)+Math.PI/2);
+    ctx.lineTo(a.x-nx*segR, a.y-ny*segR);
+    ctx.arc(a.x,a.y,segR,Math.atan2(dy,dx)+Math.PI/2,Math.atan2(dy,dx)-Math.PI/2);
+    ctx.closePath();
+
+    if (lvl===3) {
+      // Deep dark space snake: near-black with subtle dark-blue/purple tint
+      const base = Math.floor(18 + t*8);
+      ctx.fillStyle = `rgba(${base},${base},${Math.floor(28+t*10)},${0.96-t*0.2})`;
+    } else if (lvl===2) {
+      ctx.fillStyle=`rgba(${Math.floor(200-t*60)},${Math.floor(10+t*5)},${Math.floor(10+t*5)},${0.95-t*0.25})`;
+    } else {
+      ctx.fillStyle=`rgba(${Math.floor(60+t*30)},${Math.floor(190-t*70)},${Math.floor(30+t*10)},${0.95-t*0.2})`;
+    }
+    ctx.fill();
+
+    const scaleAlpha = lvl===3 ? (0.25-t*0.18) : lvl===2 ? (0.15-t*0.1) : (0.18-t*0.12);
+    ctx.strokeStyle = lvl===3 ? `rgba(100,100,220,${scaleAlpha})` : lvl===2 ? `rgba(255,80,80,${scaleAlpha})` : `rgba(180,255,100,${scaleAlpha})`;
+    ctx.lineWidth=0.7; ctx.stroke();
+  }
+
+  // Head
+  const head=pts[0], headR=r*1.1;
+  const headGrad=ctx.createRadialGradient(head.x-headR*0.3,head.y-headR*0.3,headR*0.1,head.x,head.y,headR);
+  if (lvl===3) {
+    headGrad.addColorStop(0,"#22224a"); headGrad.addColorStop(1,"#060614");
+  } else if (lvl===2) {
+    headGrad.addColorStop(0,"#ff5555"); headGrad.addColorStop(1,"#990000");
+  } else {
+    headGrad.addColorStop(0,"#aeff55"); headGrad.addColorStop(1,"#228b22");
+  }
+  ctx.beginPath(); ctx.arc(head.x,head.y,headR,0,Math.PI*2);
+  ctx.fillStyle=headGrad; ctx.fill();
+  ctx.strokeStyle = lvl===3?"rgba(120,120,255,0.7)":lvl===2?"rgba(255,100,100,0.6)":"rgba(150,255,80,0.6)";
+  ctx.lineWidth=1.5; ctx.stroke();
+
+  if(GFX.shadows){ctx.shadowColor=lvl===3?"#4444ff":lvl===2?"#ff0000":"#7fff00";}
+  if(GFX.shadows){ctx.shadowBlur=12;}
+  ctx.beginPath(); ctx.arc(head.x,head.y,headR,0,Math.PI*2);
+  ctx.fillStyle="transparent"; ctx.fill(); if(GFX.shadows){ctx.shadowBlur=0;}
+
+  // Eyes
+  const dirV = len>1?{x:pts[0].x-pts[1].x,y:pts[0].y-pts[1].y}:{x:1,y:0};
+  const dlen=Math.sqrt(dirV.x*dirV.x+dirV.y*dirV.y)||1;
+  const fd={x:dirV.x/dlen,y:dirV.y/dlen};
+  const right={x:-fd.y,y:fd.x};
+  const eyeR=headR*0.22;
+  [1,-1].forEach(side=>{
+    const ex=head.x+fd.x*headR*0.3+right.x*headR*0.45*side;
+    const ey=head.y+fd.y*headR*0.3+right.y*headR*0.45*side;
+    ctx.beginPath(); ctx.arc(ex,ey,eyeR,0,Math.PI*2);
+    // Level 3: glowing alien eyes
+    if (lvl===3) { ctx.fillStyle="#8888ff"; } else { ctx.fillStyle="#fff"; }
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(ex+fd.x*eyeR*0.3,ey+fd.y*eyeR*0.3,eyeR*0.55,0,Math.PI*2);
+    ctx.fillStyle=lvl===3?"#000020":lvl===2?"#330000":"#003300"; ctx.fill();
+    if (lvl===3) {
+      if(GFX.shadows){ctx.shadowColor="#aaaaff";} if(GFX.shadows){ctx.shadowBlur=4;}
+      ctx.beginPath(); ctx.arc(ex,ey,eyeR,0,Math.PI*2);
+      ctx.strokeStyle="rgba(160,160,255,0.6)"; ctx.lineWidth=0.8; ctx.stroke();
+      if(GFX.shadows){ctx.shadowBlur=0;}
+    }
+  });
+
+  // Tongue
+  const tongueBase={x:head.x+fd.x*(headR+2),y:head.y+fd.y*(headR+2)};
+  const tongueLen=headR*0.7, forkLen=headR*0.35;
+  ctx.strokeStyle=lvl===3?"#aa66ff":"#ff3366";
+  ctx.lineWidth=1.5; ctx.lineCap="round";
+  ctx.beginPath();
+  ctx.moveTo(tongueBase.x,tongueBase.y);
+  const tipX=tongueBase.x+fd.x*tongueLen, tipY=tongueBase.y+fd.y*tongueLen;
+  ctx.lineTo(tipX,tipY);
+  ctx.moveTo(tipX,tipY);
+  ctx.lineTo(tipX+fd.x*forkLen+right.x*forkLen,tipY+fd.y*forkLen+right.y*forkLen);
+  ctx.moveTo(tipX,tipY);
+  ctx.lineTo(tipX+fd.x*forkLen-right.x*forkLen,tipY+fd.y*forkLen-right.y*forkLen);
+  ctx.stroke(); ctx.lineCap="butt";
+}
+
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath();
+}
+
+// ─── Fullscreen ───────────────────────────────────────────────────────────────
+function enterFullscreen() {
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen();
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+function App() {
+  const [screen, setScreen]         = useState("intro");
+  const [level, setLevel]           = useState(1);
+  const [score, setScore]           = useState(0);
+  const [best, setBest]             = useState(0);
+  const [fruitsEaten, setFruitsEaten] = useState(0);
+  const [flashRed, setFlashRed]     = useState(false);
+  const [musicOn, setMusicOn]       = useState(true);
+  const [, forceRender]             = useState(0);
+
+  const canvasRef    = useRef(null);
+  const stateRef     = useRef(null);
+  const screenRef    = useRef("intro");
+  const rafRef       = useRef(null);
+  const lastTickRef  = useRef(0);
+  const audioCtxRef  = useRef(null);
+  const musicStopRef = useRef(null);
+  const touchStart   = useRef(null);
+
+  const getAudio = () => {
+    if (!audioCtxRef.current) audioCtxRef.current = mkAudio();
+    if (audioCtxRef.current?.state==="suspended") audioCtxRef.current.resume();
+    return audioCtxRef.current;
+  };
+
+  useEffect(() => {
+    if (screen==="intro" && musicOn) {
+      const t = setTimeout(() => {
+        const ctx = getAudio();
+        if (musicStopRef.current) { musicStopRef.current(); musicStopRef.current=null; }
+        musicStopRef.current = startMenuMusic(ctx);
+      }, 400);
+      return () => { clearTimeout(t); if (musicStopRef.current){ musicStopRef.current(); musicStopRef.current=null; } };
+    } else {
+      if (musicStopRef.current){ musicStopRef.current(); musicStopRef.current=null; }
+    }
+  }, [screen, musicOn]);
+
+  const cellSize = Math.min(Math.floor((Math.min(typeof window!=="undefined"?window.innerWidth:400,430)-32)/COLS),20);
+  const W=COLS*cellSize, H=ROWS*cellSize;
+
+  // generate stars once per level-3 entry
+  const makeStars = () => Array.from({length:GFX.stars},()=>({
+    x:Math.random(), y:Math.random(), r:Math.random()*1.2+0.3,
+    brightness:Math.random()*0.6+0.4, phase:Math.random()*Math.PI*2,
+  }));
+
+  const buildState = useCallback((lvl, prevScore=0) => {
+    const snake=[{x:10,y:10},{x:9,y:10},{x:8,y:10}];
+    const obs=makeObstacles(lvl);
+    const fp=randomFood(snake,obs);
+    const items = lvl===3?L3_TRASH:lvl===2?L2_FRUITS:L1_FRUITS;
+    return {
+      level:lvl, snake, prevHead:{x:10,y:10},
+      dir:{x:1,y:0}, nextDir:{x:1,y:0},
+      food:{pos:fp, emoji:items[Math.floor(Math.random()*items.length)]},
+      obstacles:obs, score:prevScore, fruitsEaten:0, particles:[],
+      interp:1, starSeed: lvl===3?makeStars():[],
+    };
+  },[]);
+
+  const startLevel = useCallback((lvl, prevScore=0) => {
+    stateRef.current = buildState(lvl, prevScore);
+    lastTickRef.current = performance.now(); // precise start time
+    screenRef.current = "playing";
+    setScreen("playing"); setLevel(lvl); setScore(prevScore); setFruitsEaten(0);
+  },[buildState]);
+
+  const handleDir = useCallback((dx,dy) => {
+    if (screenRef.current!=="playing") return;
+    const s=stateRef.current; if (!s) return;
+    const d=s.dir;
+    if (dx!==0 && d.x===0) s.nextDir={x:dx,y:0};
+    if (dy!==0 && d.y===0) s.nextDir={x:0,y:dy};
+  },[]);
+
+  useEffect(() => {
+    const h=e=>{
+      if(e.key==="ArrowUp") handleDir(0,-1);
+      if(e.key==="ArrowDown") handleDir(0,1);
+      if(e.key==="ArrowLeft") handleDir(-1,0);
+      if(e.key==="ArrowRight") handleDir(1,0);
+    };
+    window.addEventListener("keydown",h);
+    return ()=>window.removeEventListener("keydown",h);
+  },[handleDir]);
+
+  const onTouchStart=e=>{touchStart.current={x:e.touches[0].clientX,y:e.touches[0].clientY};};
+  const onTouchEnd=e=>{
+    if(!touchStart.current) return;
+    const dx=e.changedTouches[0].clientX-touchStart.current.x;
+    const dy=e.changedTouches[0].clientY-touchStart.current.y;
+    if(Math.abs(dx)<8&&Math.abs(dy)<8) return;
+    if(Math.abs(dx)>Math.abs(dy)) handleDir(dx>0?1:-1,0);
+    else handleDir(0,dy>0?1:-1);
+    touchStart.current=null;
+  };
+
+  // Game loop
+  useEffect(()=>{
+    if(screen!=="playing"){cancelAnimationFrame(rafRef.current);return;}
+    const tick=(now)=>{
+      rafRef.current=requestAnimationFrame(tick);
+      const s=stateRef.current; if(!s||!canvasRef.current) return;
+      const speed=s.level===3?L3_SPEED:s.level===2?L2_SPEED:L1_SPEED;
+      // clamp dt: if tab was hidden/paused, don't skip multiple steps
+      const rawDt = now - lastTickRef.current;
+      const dt = Math.min(rawDt, speed * 2);
+      s.interp=Math.min(dt/speed,1);
+
+      if(dt>=speed){
+        lastTickRef.current = now - (dt % speed);
+        s.prevHead={...s.snake[0]};
+        s.dir=s.nextDir;
+        const d=s.dir;
+        const head={x:s.snake[0].x+d.x, y:s.snake[0].y+d.y};
+        if(head.x<0||head.x>=COLS||head.y<0||head.y>=ROWS){die(s);return;}
+        if(s.snake.some(seg=>seg.x===head.x&&seg.y===head.y)){die(s);return;}
+        if(s.obstacles.some(o=>o.x===head.x&&o.y===head.y)){die(s);return;}
+
+        const ate=head.x===s.food.pos.x&&head.y===s.food.pos.y;
+        s.snake=ate?[head,...s.snake]:[head,...s.snake.slice(0,-1)];
+
+        if(ate){
+          playEat(getAudio());
+          navigator.vibrate?.(20);
+          const pc=s.level===3?"#8888ff":s.level===2?"#ff4444":"#a8ff78";
+          for(let i=0;i<GFX.particles;i++) s.particles.push({
+            born:now,
+            x:head.x*cellSize+cellSize/2, y:head.y*cellSize+cellSize/2,
+            vx:(Math.random()-0.5)*2.5, vy:(Math.random()-0.5)*2.5, color:pc,
+          });
+          s.particles=s.particles.filter(p=>now-p.born<700);
+
+          const newF=s.fruitsEaten+1;
+          s.fruitsEaten=newF;
+          s.score+=s.level===3?30:s.level===2?20:10;
+          setScore(s.score); setFruitsEaten(newF);
+
+          const target=s.level===1?L1_TARGET:s.level===2?L2_TARGET:L3_TARGET;
+          if(newF>=target){
+            playLvl(getAudio()); setBest(b=>Math.max(b,s.score));
+            if(s.level===1){screenRef.current="levelup2";setScreen("levelup2");}
+            else if(s.level===2){screenRef.current="levelup3";setScreen("levelup3");}
+            else{screenRef.current="win";setScreen("win");}
+            cancelAnimationFrame(rafRef.current); return;
+          }
+
+          const items=s.level===3?L3_TRASH:s.level===2?L2_FRUITS:L1_FRUITS;
+          s.food={pos:randomFood(s.snake,s.obstacles),emoji:items[Math.floor(Math.random()*items.length)]};
+        }
+        s.interp=0;
+      }
+      s.particles=s.particles.filter(p=>now-p.born<700);
+      drawGame(canvasRef.current,s,cellSize);
+    };
+
+    const die=(s)=>{
+      playDead(getAudio());
+      navigator.vibrate?.([100, 50, 100]);
+      setBest(b=>Math.max(b,s.score));
+      setFlashRed(true); setTimeout(()=>setFlashRed(false),600);
+      screenRef.current="dead"; setScreen("dead");
+      forceRender(n=>n+1); cancelAnimationFrame(rafRef.current);
+    };
+
+    rafRef.current=requestAnimationFrame(tick);
+
+    // When tab comes back into focus, reset the clock so dt doesn't explode
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        lastTickRef.current = performance.now();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  },[screen,cellSize]);
+
+  // Theme
+  const isL2=level===2, isL3=level===3;
+  const accent=isL3?"#8888ff":isL2?"#ff5555":"#a8ff78";
+  const bgColor=isL3
+    ?"linear-gradient(160deg,#000008,#00000f,#010010)"
+    :isL2?"linear-gradient(160deg,#080005,#160010,#060009)"
+    :"linear-gradient(160deg,#071407,#0c2210,#050d05)";
+  const target=level===1?L1_TARGET:level===2?L2_TARGET:L3_TARGET;
+  const pct=Math.min((fruitsEaten/target)*100,100);
+
+  const btnStyle=(primary,lvl=level)=>{
+    const lvl3Color="linear-gradient(135deg,#3333aa,#111166)";
+    const lvl2Color="linear-gradient(135deg,#cc0000,#660000)";
+    const lvl1Color="linear-gradient(135deg,#32cd32,#1a7a1a)";
+    const bg=lvl===3?lvl3Color:lvl===2?lvl2Color:lvl1Color;
+    const glow=lvl===3?"rgba(80,80,200,0.45)":lvl===2?"rgba(180,0,0,0.45)":"rgba(50,200,50,0.45)";
+    return {
+      padding:"13px 32px",
+      background:primary?bg:"rgba(255,255,255,0.08)",
+      border:primary?"none":"1px solid rgba(255,255,255,0.15)",
+      borderRadius:36, color:primary?"#fff":"#aaa",
+      fontSize:15, fontWeight:primary?800:500,
+      cursor:"pointer", letterSpacing:primary?1:0,
+      boxShadow:primary?`0 0 24px ${glow}`:"none",
+      WebkitTapHighlightColor:"transparent",
+    };
+  };
+
+  // ─── INTRO ─────────────────────────────────────────────────────────────────
+  if(screen==="intro") return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#041304,#071c07,#020802)",
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+      fontFamily:"'Trebuchet MS',sans-serif",color:"#fff",padding:24,overflow:"hidden",position:"relative"}}>
+      {["🌴","🌿","🍃","🌱","🌿","🍃","🌴","🌿"].map((l,i)=>(
+        <div key={i} style={{position:"fixed",fontSize:`${22+(i*9)%24}px`,opacity:0.09,
+          top:`${(i*131)%87}%`,left:`${(i*77)%93}%`,transform:`rotate(${i*43}deg)`,
+          pointerEvents:"none",animation:`sway ${3+(i%3)}s ease-in-out infinite alternate`}}>{l}</div>
+      ))}
+      <div style={{fontSize:70,marginBottom:6,filter:"drop-shadow(0 0 24px rgba(100,255,100,0.55))",
+        animation:"floatLogo 3s ease-in-out infinite"}}>🐍</div>
+      <div style={{fontSize:36,fontWeight:900,letterSpacing:4,color:"#a8ff78",
+        textShadow:"0 0 32px rgba(100,255,100,0.65)",marginBottom:2}}>ALHADADA</div>
+      <div style={{fontSize:14,letterSpacing:5,color:"#5dde5d",marginBottom:4}}>JUNGLE</div>
+      <div style={{fontSize:11,letterSpacing:3,color:"#3a9a3a",textTransform:"uppercase",marginBottom:16}}>First Game In AI</div>
+      <div style={{width:220,height:1,background:"linear-gradient(90deg,transparent,#2d6e2d,transparent)",marginBottom:14}}/>
+      <div style={{display:"flex",gap:10,marginBottom:14}}>
+        {[
+          {lvl:"LVL 1",color:"#32cd32",desc:"Jungle • 15 fruits",e:"🌿"},
+          {lvl:"LVL 2",color:"#ff4444",desc:"Dark Zone • 30 items",e:"☠️"},
+          {lvl:"LVL 3",color:"#8888ff",desc:"Space • 50 trash",e:"🚀"},
+        ].map((b,i)=>(
+          <div key={i} style={{background:"rgba(0,0,0,0.5)",border:`1px solid ${b.color}33`,
+            borderRadius:12,padding:"8px 12px",textAlign:"center",minWidth:68}}>
+            <div style={{fontSize:18}}>{b.e}</div>
+            <div style={{color:b.color,fontSize:12,fontWeight:900}}>{b.lvl}</div>
+            <div style={{color:"#555",fontSize:9}}>{b.desc}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{width:220,height:1,background:"linear-gradient(90deg,transparent,#2d6e2d,transparent)",marginBottom:14}}/>
+      <div style={{textAlign:"center",marginBottom:22}}>
+        <div style={{color:"#3a7a3a",fontSize:11,letterSpacing:3,textTransform:"uppercase",marginBottom:4}}>Created by</div>
+        <div style={{color:"#a8ff78",fontSize:22,fontWeight:900,letterSpacing:2,textShadow:"0 0 14px rgba(100,255,100,0.45)"}}>Zaid Imad</div>
+      </div>
+      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",justifyContent:"center"}}>
+        <button onClick={()=>{const ctx=getAudio();if(musicStopRef.current){musicStopRef.current();musicStopRef.current=null;}startLevel(1);}}
+          style={{...btnStyle(true,1),fontSize:18,padding:"15px 52px",animation:"pulsebtn 1.8s ease-in-out infinite"}}>
+          ▶ Enter Game
+        </button>
+        <button onClick={()=>{enterFullscreen();const ctx=getAudio();if(musicStopRef.current){musicStopRef.current();musicStopRef.current=null;}startLevel(1);}}
+          style={{
+            padding:"15px 20px",
+            background:"rgba(50,180,50,0.15)",
+            border:"1.5px solid rgba(100,220,100,0.35)",
+            borderRadius:36,color:"#a8ff78",fontSize:16,fontWeight:700,
+            cursor:"pointer",WebkitTapHighlightColor:"transparent",
+            letterSpacing:1,whiteSpace:"nowrap",
+          }}>
+          ⛶ Fullscreen
+        </button>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginTop:14}}>
+        <button onClick={()=>{getAudio();setMusicOn(v=>!v);}} style={{
+          display:"flex",alignItems:"center",gap:7,
+          background:musicOn?"rgba(50,180,50,0.22)":"rgba(80,80,80,0.18)",
+          border:musicOn?"1.5px solid rgba(100,220,100,0.45)":"1.5px solid rgba(150,150,150,0.25)",
+          borderRadius:24,color:musicOn?"#a8ff78":"#666",
+          fontSize:13,fontWeight:700,padding:"6px 16px",
+          cursor:"pointer",WebkitTapHighlightColor:"transparent",transition:"all 0.25s",letterSpacing:0.5,
+        }}>
+          <span style={{fontSize:16}}>{musicOn?"🎵":"🔇"}</span>
+          <span>{musicOn?"Music ON":"Music OFF"}</span>
+          <span style={{display:"inline-block",width:28,height:15,borderRadius:10,
+            background:musicOn?"#32cd32":"#444",position:"relative",transition:"background 0.25s",marginLeft:2}}>
+            <span style={{position:"absolute",top:2,left:musicOn?15:2,width:11,height:11,borderRadius:"50%",
+              background:"#fff",transition:"left 0.25s",boxShadow:"0 1px 3px rgba(0,0,0,0.4)"}}/>
+          </span>
+        </button>
+        <div style={{color:"rgba(80,160,80,0.38)",fontSize:10}}>Swipe or D-Pad</div>
+      </div>
+      <style>{`
+        @keyframes floatLogo{0%,100%{transform:translateY(0)}50%{transform:translateY(-14px)}}
+        @keyframes sway{from{transform:rotate(-6deg)}to{transform:rotate(9deg)}}
+        @keyframes pulsebtn{0%,100%{box-shadow:0 0 18px rgba(50,205,50,0.35)}50%{box-shadow:0 0 38px rgba(50,205,50,0.75)}}
+      `}</style>
+    </div>
+  );
+
+  // ─── LEVEL UP → 2 ──────────────────────────────────────────────────────────
+  if(screen==="levelup2") return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#0a0005,#1a0010,#050008)",
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+      fontFamily:"'Trebuchet MS',sans-serif",gap:14,padding:24,color:"#fff"}}>
+      <div style={{fontSize:64,animation:"floatLogo 2s ease-in-out infinite"}}>🔥</div>
+      <div style={{color:"#ff4444",fontSize:34,fontWeight:900,letterSpacing:3,textShadow:"0 0 22px #ff0000"}}>LEVEL 2</div>
+      <div style={{color:"#ff9999",fontSize:14,textAlign:"center",maxWidth:240,lineHeight:1.7}}>
+        The jungle has gone dark.<br/>Walls kill. Watch the obstacles.<br/>
+        Your snake is now <b style={{color:"#ff4444"}}>RED</b> and faster.
+      </div>
+      <div style={{background:"rgba(255,0,0,0.08)",border:"1px solid #ff444428",borderRadius:12,padding:"10px 24px",textAlign:"center"}}>
+        <div style={{color:"#666",fontSize:11}}>Score so far</div>
+        <div style={{color:"#ff6666",fontSize:30,fontWeight:900}}>{score}</div>
+      </div>
+      <button onClick={()=>{getAudio();startLevel(2,score);}} style={{...btnStyle(true,2),animation:"pulsered 1.8s ease-in-out infinite"}}>
+        ▶ Enter Dark Zone
+      </button>
+      <style>{`
+        @keyframes floatLogo{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+        @keyframes pulsered{0%,100%{box-shadow:0 0 18px rgba(200,0,0,0.35)}50%{box-shadow:0 0 38px rgba(200,0,0,0.75)}}
+      `}</style>
+    </div>
+  );
+
+  // ─── LEVEL UP → 3 ──────────────────────────────────────────────────────────
+  if(screen==="levelup3") return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#000008,#00000f,#010010)",
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+      fontFamily:"'Trebuchet MS',sans-serif",gap:14,padding:24,color:"#fff",position:"relative",overflow:"hidden"}}>
+      {/* stars bg */}
+      {Array.from({length:30}).map((_,i)=>(
+        <div key={i} style={{position:"fixed",width:2,height:2,borderRadius:"50%",background:"#fff",
+          opacity:Math.random()*0.6+0.2,top:`${Math.random()*100}%`,left:`${Math.random()*100}%`,
+          animation:`twinkle ${1.5+Math.random()*2}s ease-in-out infinite alternate`,pointerEvents:"none"}}/>
+      ))}
+      <div style={{fontSize:64,animation:"floatLogo 2s ease-in-out infinite",filter:"drop-shadow(0 0 20px rgba(100,100,255,0.7))"}}>🚀</div>
+      <div style={{color:"#8888ff",fontSize:34,fontWeight:900,letterSpacing:3,textShadow:"0 0 24px #4444ff"}}>LEVEL 3</div>
+      <div style={{color:"#aaaaff",fontSize:14,textAlign:"center",maxWidth:260,lineHeight:1.8}}>
+        You've entered <b style={{color:"#8888ff"}}>outer space</b>.<br/>
+        Your snake is now <b style={{color:"#4444dd"}}>dark</b> and cosmic.<br/>
+        Eat <b style={{color:"#8888ff"}}>50 pieces of space trash</b>.<br/>
+        Asteroids block your path. Good luck. 🌌
+      </div>
+      <div style={{background:"rgba(80,80,200,0.1)",border:"1px solid #8888ff28",borderRadius:12,padding:"10px 24px",textAlign:"center"}}>
+        <div style={{color:"#666",fontSize:11}}>Score so far</div>
+        <div style={{color:"#aaaaff",fontSize:30,fontWeight:900}}>{score}</div>
+      </div>
+      <button onClick={()=>{getAudio();startLevel(3,score);}} style={{...btnStyle(true,3),animation:"pulsespace 1.8s ease-in-out infinite"}}>
+        🚀 Launch Into Space
+      </button>
+      <style>{`
+        @keyframes floatLogo{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+        @keyframes twinkle{from{opacity:0.2}to{opacity:1}}
+        @keyframes pulsespace{0%,100%{box-shadow:0 0 18px rgba(80,80,200,0.35)}50%{box-shadow:0 0 40px rgba(100,100,255,0.8)}}
+      `}</style>
+    </div>
+  );
+
+  // ─── WIN ───────────────────────────────────────────────────────────────────
+  if(screen==="win") return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#000008,#00000f,#010010)",
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+      fontFamily:"'Trebuchet MS',sans-serif",padding:24,color:"#fff",position:"relative",overflow:"hidden",textAlign:"center"}}>
+      {Array.from({length:40}).map((_,i)=>(
+        <div key={i} style={{position:"fixed",width:i%5===0?3:1.5,height:i%5===0?3:1.5,borderRadius:"50%",
+          background:i%3===0?"#ffd700":i%3===1?"#a8ff78":"#8888ff",
+          opacity:Math.random()*0.7+0.3,top:`${Math.random()*100}%`,left:`${Math.random()*100}%`,
+          animation:`twinkle ${1+Math.random()*2}s ease-in-out infinite alternate`,pointerEvents:"none"}}/>
+      ))}
+      {/* Giant trophy */}
+      <div style={{fontSize:90,animation:"floatTrophy 2.5s ease-in-out infinite",
+        filter:"drop-shadow(0 0 30px rgba(255,215,0,0.8)) drop-shadow(0 0 60px rgba(255,215,0,0.4))",marginBottom:10}}>🏆</div>
+
+      <div style={{color:"#ffd700",fontSize:28,fontWeight:900,letterSpacing:2,
+        textShadow:"0 0 28px gold",marginBottom:6}}>
+        🎉 مبروك على الفوز يا بطل وادي الحداد 🎉
+      </div>
+      <div style={{color:"#ffe87a",fontSize:13,marginBottom:6,opacity:0.85,letterSpacing:0.5}}>
+        Congratulations on your victory, champion of Wadi Al-Hadada
+      </div>
+
+      <div style={{display:"flex",gap:10,margin:"12px 0",flexWrap:"wrap",justifyContent:"center"}}>
+        {["🌿 Level 1","☠️ Level 2","🚀 Level 3"].map((t,i)=>(
+          <div key={i} style={{background:"rgba(255,215,0,0.08)",border:"1px solid #ffd70030",
+            borderRadius:10,padding:"6px 14px",fontSize:11,color:"#ffd700"}}>✅ {t}</div>
+        ))}
+      </div>
+
+      <div style={{background:"rgba(255,215,0,0.1)",border:"1px solid #ffd70035",borderRadius:14,
+        padding:"14px 32px",textAlign:"center",marginBottom:12}}>
+        <div style={{color:"#888",fontSize:11}}>Final Score</div>
+        <div style={{color:"#ffd700",fontSize:40,fontWeight:900,textShadow:"0 0 16px gold"}}>{score}</div>
+        <div style={{color:"#5a8a5a",fontSize:11,marginTop:4}}>Best: {best}</div>
+      </div>
+
+      <div style={{color:"#3a6a3a",fontSize:12,letterSpacing:2,marginBottom:16}}>
+        Created by <span style={{color:"#a8ff78",fontWeight:700}}>Zaid Imad</span>
+      </div>
+      <button onClick={()=>{setScreen("intro");setScore(0);}}
+        style={{padding:"13px 36px",background:"linear-gradient(135deg,#ffd700,#b8900a)",
+          border:"none",borderRadius:36,color:"#000",fontSize:16,fontWeight:900,
+          cursor:"pointer",letterSpacing:1}}>🏠 Main Menu</button>
+      <style>{`
+        @keyframes floatTrophy{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-16px) scale(1.05)}}
+        @keyframes twinkle{from{opacity:0.2}to{opacity:1}}
+      `}</style>
+    </div>
+  );
+
+  // ─── PLAYING / DEAD ────────────────────────────────────────────────────────
+  return (
+    <div style={{minHeight:"100vh",background:bgColor,display:"flex",flexDirection:"column",
+      alignItems:"center",justifyContent:"center",fontFamily:"'Trebuchet MS',sans-serif",
+      userSelect:"none",padding:"10px",overflow:"hidden",position:"relative"}}
+      onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+
+      {/* bg decorations */}
+      {(isL3
+        ?["⭐","🌟","✨","💫","⭐","🌟","✨"]
+        :isL2?["💀","🔥","☠️","💀","🔥","☠️","💀"]
+        :["🌿","🍃","🌴","🌿","🍃","🌱","🌿"]
+      ).map((l,i)=>(
+        <div key={i} style={{position:"fixed",fontSize:`${14+(i*7)%20}px`,opacity:0.07,
+          top:`${(i*131)%89}%`,left:`${(i*79)%93}%`,transform:`rotate(${i*42}deg)`,pointerEvents:"none"}}>{l}</div>
+      ))}
+      {flashRed&&<div style={{position:"fixed",inset:0,background:"rgba(255,0,0,0.22)",zIndex:100,pointerEvents:"none"}}/>}
+
+      {/* HUD */}
+      <div style={{
+        display:"flex", justifyContent:"space-between", alignItems:"center",
+        width:"100%", maxWidth:420, padding:"10px 16px",
+        fontSize:18, fontWeight:700, color:accent,
+        background:"rgba(0,0,0,0.3)", borderRadius:12,
+        border:`1px solid ${accent}22`, marginBottom:6, boxSizing:"border-box",
+      }}>
+        <span style={{display:"flex",alignItems:"center",gap:5}}>⭐ {score}</span>
+        <span style={{display:"flex",alignItems:"center",gap:5,fontSize:14,opacity:0.85}}>
+          {isL3?"🛢️":isL2?"☠️":"🍎"} {fruitsEaten}/{target}
+        </span>
+        <span style={{display:"flex",alignItems:"center",gap:5}}>🏆 {best}</span>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{width:`${W}px`,height:5,background:"rgba(255,255,255,0.07)",borderRadius:4,marginBottom:6,overflow:"hidden"}}>
+        <div style={{width:`${pct}%`,height:"100%",borderRadius:4,transition:"width 0.25s",
+          background:isL3?"linear-gradient(90deg,#222288,#8888ff)":isL2?"linear-gradient(90deg,#660000,#ff4444)":"linear-gradient(90deg,#1a6b1a,#a8ff78)"}}/>
+      </div>
+
+      {/* Canvas */}
+      <div style={{position:"relative",borderRadius:8,overflow:"hidden",
+        border:`2px solid ${isL3?"#222266":isL2?"#6e0000":"#2d6e2d"}`,
+        boxShadow:`0 0 28px ${isL3?"rgba(60,60,200,0.25)":isL2?"rgba(200,0,0,0.2)":"rgba(60,180,60,0.14)"}`}}>
+        <canvas ref={canvasRef} width={W} height={H} style={{display:"block"}}/>
+
+        {screen==="dead"&&(
+          <div style={{position:"absolute",inset:0,zIndex:20,background:"rgba(0,0,0,0.88)",
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10}}>
+            <div style={{fontSize:50}}>💀</div>
+            <div style={{color:"#ff4444",fontSize:24,fontWeight:900,letterSpacing:2}}>GAME OVER</div>
+            <div style={{color:"#aaa",fontSize:13}}>Score: <b style={{color:accent}}>{score}</b></div>
+            <div style={{color:"#666",fontSize:11}}>{isL3?"Trash":"Fruits"}: {fruitsEaten}/{target}</div>
+            {score>0&&score>=best&&<div style={{color:"#ffd700",fontSize:12,fontWeight:700}}>🏆 New Best!</div>}
+            <div style={{display:"flex",gap:10,marginTop:8}}>
+              <button onClick={()=>{getAudio();startLevel(level,0);}} style={btnStyle(true)}>↺ Retry</button>
+              <button onClick={()=>{setScreen("intro");setScore(0);}} style={btnStyle(false)}>🏠 Menu</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* D-Pad */}
+      <div style={{marginTop:14,display:"grid",gridTemplateColumns:"54px 54px 54px",gridTemplateRows:"54px 54px 54px",gap:5}}>
+        {[[null,{l:"▲",dx:0,dy:-1},null],
+          [{l:"◀",dx:-1,dy:0},null,{l:"▶",dx:1,dy:0}],
+          [null,{l:"▼",dx:0,dy:1},null]
+        ].map((row,r)=>row.map((btn,c)=>btn?(
+          <button key={`${r}${c}`}
+            onTouchStart={e=>{e.preventDefault();navigator.vibrate?.(8);handleDir(btn.dx,btn.dy);}}
+            onClick={()=>handleDir(btn.dx,btn.dy)}
+            style={{
+              background:isL3?"rgba(40,40,120,0.3)":isL2?"rgba(120,0,0,0.25)":"rgba(40,120,40,0.25)",
+              border:`1.5px solid ${isL3?"rgba(100,100,220,0.35)":isL2?"rgba(200,0,0,0.3)":"rgba(70,180,70,0.3)"}`,
+              borderRadius:12,color:accent,fontSize:18,cursor:"pointer",
+              display:"flex",alignItems:"center",justifyContent:"center",
+              width:54,height:54,WebkitTapHighlightColor:"transparent"}}>{btn.l}</button>
+        ):<div key={`${r}${c}`}/>))}
+      </div>
+
+      <div style={{marginTop:8,color:`${accent}33`,fontSize:10}}>
+        Swipe or D-Pad • <span style={{color:`${accent}55`}}>Zaid Imad</span>
+      </div>
+      <style>{`button:active{opacity:0.6;transform:scale(0.92)}`}</style>
+    </div>
+  );
+}
+
+window.__AlhadadaApp = App;
+
+window.addEventListener('load', () => {
+  document.getElementById('loading').style.display = 'none';
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    React.createElement(window.__AlhadadaApp)
+  );
+});
+  </script>
+</body>
+</html>
