@@ -11,7 +11,7 @@
 
 **A 3-level snake game built entirely with AI — playable on any phone, no install needed.**
 
-[▶ Play Now](https://YOUR-USERNAME.github.io/alhadada-jungle/) • [📱 Install as App](#install-as-app)
+[▶ Play Now](https://ZaidImad-1.github.io/alhadada-jungle/) • [📱 Install as App](#install-as-app)
 
 </div>
 
@@ -60,7 +60,7 @@
 
 ## 🚀 Play Online
 
-👉 **[https://YOUR-USERNAME.github.io/alhadada-jungle/](https://YOUR-USERNAME.github.io/alhadada-jungle/)**
+👉 **[https://ZaidImad-1.github.io/alhadada-jungle/](https://ZaidImad-1.github.io/alhadada-jungle/)**
 
 Or download `AlhadadaJungle.html` and open it in any browser — no server needed.
 
@@ -87,6 +87,7 @@ Or download `AlhadadaJungle.html` and open it in any browser — no server neede
 
 <div align="center">
 
+fix: update game link to correct URL
 Made with ❤️ and 🤖
 
 </div>
